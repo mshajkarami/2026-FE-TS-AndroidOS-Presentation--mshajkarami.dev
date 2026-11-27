@@ -71,6 +71,13 @@ export function App() {
     setCurrentIndex((prev) => Math.max(prev - 1, 0));
   }, []);
 
+  useEffect(() => {
+    (window as unknown as { __setSlideIndex?: (i: number) => void; __currentSlideIndex?: number }).__setSlideIndex = (i: number) => {
+      setCurrentIndex(Math.max(0, Math.min(i, SLIDES.length - 1)));
+    };
+    (window as unknown as { __setSlideIndex?: (i: number) => void; __currentSlideIndex?: number }).__currentSlideIndex = currentIndex;
+  }, [currentIndex]);
+
   const toggleFullscreen = useCallback(async () => {
     try {
       if (!document.fullscreenElement) {
@@ -105,6 +112,12 @@ export function App() {
       } else if (e.key === 'ArrowRight' || e.key === 'PageUp' || e.key === 'ArrowUp') {
         e.preventDefault();
         goPrev();
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        setCurrentIndex(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        setCurrentIndex(SLIDES.length - 1);
       } else if (e.key.toLowerCase() === 'n') {
         setShowNotes((prev) => !prev);
       } else if (e.key.toLowerCase() === 'g') {

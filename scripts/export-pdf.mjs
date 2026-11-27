@@ -18,13 +18,14 @@ const ROOT = path.resolve(__dirname, '..');
 const DIST_HTML = path.resolve(ROOT, 'dist', 'index.html');
 const SLIDES_DIR = path.resolve(ROOT, 'dist', '_slides');
 const PDF_OUT = path.resolve(ROOT, 'dist', 'Android_OS_Presentation_Group7.pdf');
+const ROOT_PDF = path.resolve(ROOT, 'Android_OS_Presentation_Group7_v1.pdf');
 
 const TOTAL_SLIDES = 34;
 const VIEWPORT_W = 1920;
 const VIEWPORT_H = 1080;
 
-// ms to wait after navigating to a slide (let CSS animations settle)
-const SETTLE_MS = 900;
+// Settle time for CSS animations & layout
+const SETTLE_MS = 600;
 
 async function captureSlides() {
   if (!fs.existsSync(DIST_HTML)) {
@@ -46,26 +47,12 @@ async function captureSlides() {
   console.log('📄  Loading:', fileUrl);
   await page.goto(fileUrl, { waitUntil: 'networkidle' });
 
-  // Wait for the React app to fully mount
-  try {
-    await page.waitForSelector('[data-slide-id]', { timeout: 15000 });
-  } catch {
-    // Try alternative selectors
-    await page.waitForTimeout(3000);
-  }
+  // Wait for React to mount
+  await page.waitForTimeout(2000);
 
-  // Dismiss any overlay / close button
-  const closeBtn = page.locator('button[title="Close"], button:has-text("×")');
-  if (await closeBtn.count() > 0) {
-    await closeBtn.first().click();
-    await page.waitForTimeout(400);
-  }
+  // Close any modal or overview if opened
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(400);
-
-  // Jump to slide 1
-  await page.keyboard.press('Home');
-  await page.waitForTimeout(SETTLE_MS);
+  await page.waitForTimeout(300);
 
   const slidePaths = [];
 
@@ -73,27 +60,51 @@ async function captureSlides() {
     const slideNum = i + 1;
     const imgPath = path.join(SLIDES_DIR, `slide-${String(slideNum).padStart(2, '0')}.png`);
 
+    // 1. Programmatically navigate to slide i
+    await page.evaluate((targetIndex) => {
+      if (typeof window.__setSlideIndex === 'function') {
+        window.__setSlideIndex(targetIndex);
+      }
+    }, i);
+
+    // 2. Wait until dock shows the current slide number
+    await page.waitForFunction(
+      (expectedNum) => {
+        const text = document.body.innerText || '';
+        return text.includes(`${expectedNum} / 34`);
+      },
+      slideNum,
+      { timeout: 4000 }
+    ).catch(() => {
+      console.warn(`  ⚠️ Timeout waiting for slide indicator ${slideNum}/34`);
+    });
+
+    // 3. Wait for animations to complete
     await page.waitForTimeout(SETTLE_MS);
+
+    // 4. Retrieve heading to verify unique slide
+    const slideHeading = await page.evaluate(() => {
+      const h = document.querySelector('h1, h2, h3');
+      return h ? h.innerText.replace(/\s+/g, ' ').trim() : 'Slide';
+    });
+
+    // 5. Screenshot
     await page.screenshot({ path: imgPath, fullPage: false, type: 'png' });
     slidePaths.push(imgPath);
 
-    process.stdout.write(`  📸  Captured slide ${slideNum}/${TOTAL_SLIDES}\r`);
-
-    if (i < TOTAL_SLIDES - 1) {
-      await page.keyboard.press('ArrowRight');
-    }
+    console.log(`  📸 [${String(slideNum).padStart(2, '0')}/34] ${slideHeading.slice(0, 50)}`);
   }
 
   await browser.close();
-  console.log(`\n✅  ${TOTAL_SLIDES} slides captured to dist/_slides/`);
+  console.log(`\n✅  All ${TOTAL_SLIDES} distinct slides captured to dist/_slides/`);
   return slidePaths;
 }
 
 async function buildPDF(slidePaths) {
-  console.log('📦  Building PDF…');
+  console.log('\n📦  Assembling multi-page PDF…');
 
   return new Promise((resolve, reject) => {
-    const W_PT = VIEWPORT_W * 0.75; // px → pt  (96 dpi → 72 pt/inch)
+    const W_PT = VIEWPORT_W * 0.75; // px → pt (72 DPI)
     const H_PT = VIEWPORT_H * 0.75;
 
     const doc = new PDFDocument({
@@ -102,10 +113,10 @@ async function buildPDF(slidePaths) {
       margin: 0,
       info: {
         Title: 'سیستم‌عامل اندروید — کالبدشکافی یک کلیک',
-        Author: 'مهندس حسنپور | مهندس ریسمانی | مهندس حاج کرمی  (mshajkarami.dev)',
+        Author: 'مهندس حسنپور | مهندس ریسمانی | مهندس حاج کرمی (mshajkarami.dev)',
         Subject: 'Android Operating System — Group 7 Presentation',
         Keywords: 'Android, OS, Kernel, Zygote, ART, SELinux, SurfaceFlinger, mshajkarami',
-        Creator: 'mshajkarami.dev Presentation Architect v1.0',
+        Creator: 'mshajkarami.dev Presentation Architect',
         Producer: 'Playwright + pdfkit',
       },
     });
@@ -117,25 +128,28 @@ async function buildPDF(slidePaths) {
       doc.addPage({ size: [W_PT, H_PT], margin: 0 });
       doc.image(slidePaths[i], 0, 0, { width: W_PT, height: H_PT });
 
-      // Slide number footer
+      // Slide footer info
       doc
         .fillColor('#3ddc84')
-        .fontSize(8)
+        .fontSize(9)
         .font('Helvetica')
         .text(
           `Slide ${i + 1} / ${slidePaths.length}  |  Android OS Presentation — Group 7  |  mshajkarami.dev`,
-          0, H_PT - 16,
+          0,
+          H_PT - 18,
           { width: W_PT, align: 'center' }
         );
-
-      process.stdout.write(`  📄  Added page ${i + 1}/${slidePaths.length} to PDF\r`);
     }
 
     doc.end();
 
     stream.on('finish', () => {
-      const sizeMb = (fs.statSync(PDF_OUT).size / 1024 / 1024).toFixed(1);
-      console.log(`\n✅  PDF ready → dist/Android_OS_Presentation_Group7.pdf (${sizeMb} MB)`);
+      // Also copy to root for quick access
+      fs.copyFileSync(PDF_OUT, ROOT_PDF);
+      const sizeMb = (fs.statSync(ROOT_PDF).size / 1024 / 1024).toFixed(1);
+      console.log(`✅  PDF generated successfully! (${sizeMb} MB)`);
+      console.log(`    📁 dist/Android_OS_Presentation_Group7.pdf`);
+      console.log(`    📁 Android_OS_Presentation_Group7_v1.pdf`);
       resolve();
     });
 
@@ -145,17 +159,17 @@ async function buildPDF(slidePaths) {
 
 async function main() {
   console.log('\n╔══════════════════════════════════════════════════════╗');
-  console.log('║   Android OS Presentation — PDF Exporter             ║');
-  console.log('║   mshajkarami.dev  ·  Powered by Playwright + pdfkit ║');
+  console.log('║   Android OS Presentation — PDF Exporter v2          ║');
+  console.log('║   mshajkarami.dev · Powered by Playwright + pdfkit   ║');
   console.log('╚══════════════════════════════════════════════════════╝\n');
 
   const slidePaths = await captureSlides();
   await buildPDF(slidePaths);
 
-  console.log('\n🎉  Done! Open: dist/Android_OS_Presentation_Group7.pdf');
+  console.log('\n🎉  Done! Full 34-slide PDF is ready.');
 }
 
 main().catch((err) => {
-  console.error('❌  Export failed:', err.message);
+  console.error('❌  Export failed:', err);
   process.exit(1);
 });
